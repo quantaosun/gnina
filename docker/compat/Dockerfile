@@ -1,7 +1,7 @@
 # Maximum Compatibility Build - DO NOT USE FOR PRODUCTION
 # Build off of centos7 (ubi 7 didn't have static libc)
 
-FROM nvidia/cuda:11.6.2-cudnn8-devel-centos7
+FROM nvidia/cuda:11.6.2-cudnn8-devel-centos7@sha256:5ca6e08aca2ca35af594298cbc84fe2acec54cc7ec3101b10f0e083363b7baad
 
 RUN yum update -y
 

@@ -1,7 +1,7 @@
 # Recommended build process
 
 #get CUDA and cudnn
-FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu18.04
+FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu18.04@sha256:8b2b20a400d4010aefa03439a664274848335cd23f5fd4ba8a7913d913fa6841
 
 # get packages 
 WORKDIR /root

@@ -1,7 +1,7 @@
 # Recommended build process
 
 #get CUDA 
-FROM nvidia/cuda:11.7.0-devel-ubuntu22.04
+FROM nvidia/cuda:11.7.0-devel-ubuntu22.04@sha256:5318b4c5e142345feba0645960dcdf725b064aa95ac8679204f090b56d675a07
 
 # get packages 
 WORKDIR /root

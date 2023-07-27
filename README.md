@@ -314,3 +314,5 @@ License
 =======
 
 gnina is dual licensed under GPL and Apache.  The GPL license is necessitated by the use of OpenBabel (which is GPL licensed).  In order to use gnina under the Apache license only, all references to OpenBabel must be removed from the source code.
+
+https://bits.csb.pitt.edu/files/gnina2018_poster.pdf 

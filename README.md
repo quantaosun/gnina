@@ -1,3 +1,5 @@
+How to train the model: https://www.protocols.io/view/train-cnn-model-using-gnina-3rngm5e 
+
 [![codecov](https://codecov.io/gh/gnina/gnina/branch/master/graph/badge.svg?token=kOC9GUKEGa)](https://codecov.io/gh/gnina/gnina)
 ![Github CI](https://github.com/gnina/gnina/actions/workflows/CI.yml/badge.svg)
 

@@ -20,10 +20,13 @@ enum pose_sort_order {
 //for reading in as a commandline option
 std::istream& operator>>(std::istream &in, pose_sort_order &sort_order);
 
+
 enum cnn_scoring_level {
   CNNnone, //don't use CNN
   CNNrescore, // use CNN only for final scoring and ranking
   CNNrefinement, // use CNN only for minimization
+  CNNmetropolisrescore, // use CNN for MC and final scoring
+  CNNmetropolisrefine, // use CNN for MC and minimization
   CNNall // use CNN everywhere
 };
 
@@ -85,6 +88,7 @@ struct user_settings {
     int num_mc_steps;
     int max_mc_steps;
     int num_mc_saved;
+    fl temperature;
     pose_sort_order sort_order;
 
     bool score_only;
@@ -94,6 +98,7 @@ struct user_settings {
     bool include_atom_info;
     bool gpu_docking; //use gpu for non-CNN operations too
     bool no_gpu;
+    bool no_lig;
 
 
     cnn_options cnnopts;
@@ -102,10 +107,10 @@ struct user_settings {
     user_settings()
         :  num_modes(9), out_min_rmsd(1), forcecap(1000),
             seed(auto_seed()), verbosity(1), cpu(1), device(0),
-            exhaustiveness(10), num_mc_steps(0), max_mc_steps(0), num_mc_saved(50),
+            exhaustiveness(10), num_mc_steps(0), max_mc_steps(0), num_mc_saved(50), temperature(0),
             sort_order(CNNscore), score_only(false),
             randomize_only(false), local_only(false), dominimize(false),
-            include_atom_info(false), gpu_docking(false), no_gpu(false) {
+            include_atom_info(false), gpu_docking(false), no_gpu(false), no_lig(false) {
 
     }
 };

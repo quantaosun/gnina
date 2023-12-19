@@ -10,8 +10,10 @@ if(POLICY CMP0104)
   cmake_policy(SET CMP0104 OLD) #TODO: clean up Cuda.cmake to be modern to avoid this workaround
 endif()
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 17)
+
+add_definitions(-DCMAKE_EXPORT_COMPILE_COMMANDS=ON) # for vs code
 
 if("${CMAKE_BUILD_TYPE}" STREQUAL "")
   set(CMAKE_BUILD_TYPE Release)
@@ -87,6 +89,7 @@ if(NOT LIBMOLGRID_LIBRARY)
   set(LIBMOLGRID_LIBRARY ${EXTERNAL_INSTALL_LOCATION}/lib/libmolgrid.a)
   include_directories(${LIBMOLGRID_INCLUDE_DIR})
   find_package (Python COMPONENTS Interpreter Development)
+  set(PYTHONPATH $ENV{PYTHONPATH})
   set(ENV{PYTHONPATH} "${PYTHONPATH}:${EXTERNAL_INSTALL_LOCATION}/lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages/")
 else()
   add_custom_target(libmolgrid)

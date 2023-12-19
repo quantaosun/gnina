@@ -819,7 +819,7 @@ void MolGridDataLayer<Dtype>::forward(const vector<Blob<Dtype>*>& bottom, const 
     CHECK_GT(batch_info.size(), 0) << "Empty batch info";
     CHECK_EQ(group_size, 1) << "Groups not currently supported with structure in memory";
     if(batch_info[0].orig_rec_atoms.size() == 0) LOG(WARNING) << "Receptor not set in MolGridDataLayer";
-    CHECK_GT(batch_info[0].orig_lig_atoms.size(),0) << "Ligand not set in MolGridDataLayer";
+    if(batch_info[0].orig_lig_atoms.size() == 0) LOG(WARNING) << "Ligand not set in MolGridDataLayer";
     //memory is now available
     set_grid_minfo(top_data, batch_info[0], peturb, gpu, false);
     perturbations.push_back(peturb);
@@ -1112,7 +1112,8 @@ void MolGridDataLayer<Dtype>::setLigand(const vector<float3>& coords, const vect
 
   if (calcCenter || !isfinite(grid_center[0])) {
     gfloat3 c = batch_info[0].orig_lig_atoms.center();
-    setGridCenter(vec(c.x,c.y,c.z));
+    if(coords.size() != 0) //don't override center if there was no ligand
+      setGridCenter(vec(c.x,c.y,c.z));
   }
 }
 

@@ -55,6 +55,7 @@
 #include "result_info.h"
 #include "box.h"
 #include "flexinfo.h"
+#include "covinfo.h"
 #include "builtinscoring.h"
 #include "sem.h"
 #include "user_opts.h"
@@ -140,7 +141,7 @@ fl do_randomization(model& m, const vec& corner1,
 
 void refine_structure(model& m, const precalculate& prec, non_cache& nc,
     output_type& out, const vec& cap, const minimization_params& minparm,
-    grid& user_grid, int verbosity, tee& log)
+    grid& user_grid, int verbosity, tee& log,non_cache& nc_new)
     {
   // std::cout << m.get_name() << " | pose " << m.get_pose_num() << " | refining structure\n";
   change g(m.get_size(), nc.move_receptor());
@@ -179,7 +180,7 @@ void refine_structure(model& m, const precalculate& prec, non_cache& nc,
     log << "Total energy after refinement: " << std::fixed << std::setprecision(5) << final_e; 
     log.endl();
     //non_cache::eval for empirical energy
-    fl final_emp_e = nc.eval(m, cap[1]);
+    fl final_emp_e = nc_new.eval(m, cap[1]);
     log << "Empirical energy after refinement: " << std::fixed << std::setprecision(5) << final_emp_e; 
     log.endl();
   }
@@ -248,7 +249,7 @@ void do_search(model& m, const boost::optional<model>& ref,
     const parallel_mc& par, const user_settings& settings,
     bool compute_atominfo, tee& log,
     const terms *t, grid& user_grid, CNNScorer& cnn,
-    std::vector<result_info>& results)
+    std::vector<result_info>& results,szv_grid_cache& grid_cache, const grid_dims& gd, fl slope)
 {
   boost::timer::cpu_timer time;
   try {
@@ -266,6 +267,7 @@ void do_search(model& m, const boost::optional<model>& ref,
         settings.forcecap); //small cap restricts initial movement from clash
 
     cnn.set_center_from_model(m);
+    non_cache nc_new = non_cache(grid_cache, gd, &prec, slope);
     if (settings.score_only)
     {
       cnn.freeze_receptor();
@@ -321,7 +323,7 @@ void do_search(model& m, const boost::optional<model>& ref,
       output_type out(c, e);
       doing(settings.verbosity, "Performing local search", log);
       refine_structure(m, prec, nc, out, authentic_v, par.mc.ssd_par.minparm,
-          user_grid,settings.verbosity,log);
+          user_grid,settings.verbosity,log,nc_new);
       done(settings.verbosity, log);
       m.set(out.c);
 
@@ -371,14 +373,21 @@ void do_search(model& m, const boost::optional<model>& ref,
 
       output_container out_cont;
       doing(settings.verbosity, "Performing search", log);
-      par(m, out_cont, prec, ig, corner1, corner2, generator, user_grid);
+      par(m, out_cont, prec, ig, corner1, corner2, generator, user_grid,nc);
       done(settings.verbosity, log);
       doing(settings.verbosity, "Refining results", log);
 
+      
       VINA_FOR_IN(i, out_cont) {
+        if (settings.cnnopts.cnn_scoring==CNNmetropolisrescore)//don't refine with cnn if rescoring
+        {
+          refine_structure(m, prec, nc_new, out_cont[i], authentic_v,
+              par.mc.ssd_par.minparm, user_grid,settings.verbosity,log,nc_new);
+        }
+        else
         refine_structure(m, prec, nc, out_cont[i], authentic_v,
-            par.mc.ssd_par.minparm, user_grid,settings.verbosity,log);
-
+              par.mc.ssd_par.minparm, user_grid,settings.verbosity,log,nc_new);
+        
         get_cnn_info(m, cnn, log, cnnscore, cnnaffinity, cnnvariance);
 
         out_cont[i].cnnscore = cnnscore;
@@ -387,7 +396,9 @@ void do_search(model& m, const boost::optional<model>& ref,
 
         if (not_max(out_cont[i].e)) {
             intramolecular_energy = m.eval_intramolecular(exact_prec, authentic_v, out_cont[i].c);
-            out_cont[i].e = m.eval_adjusted(sf, exact_prec, nc, authentic_v, out_cont[i].c, intramolecular_energy, user_grid);
+            //we want vina energies not CNN
+            out_cont[i].e = m.eval_adjusted(sf, exact_prec, nc_new, authentic_v, out_cont[i].c, intramolecular_energy, user_grid);
+            out_cont[i].intramol = intramolecular_energy;
         }
       }
 
@@ -411,9 +422,9 @@ void do_search(model& m, const boost::optional<model>& ref,
       log.setf(std::ios::fixed, std::ios::floatfield);
       log.setf(std::ios::showpoint);
       log << '\n';
-      log << "mode |  affinity  |    CNN     |   CNN\n";
-      log << "     | (kcal/mol) | pose score | affinity\n";
-      log << "-----+------------+------------+----------\n";
+      log << "mode |  affinity  |  intramol  |    CNN     |   CNN\n";
+      log << "     | (kcal/mol) | (kcal/mol) | pose score | affinity\n";
+      log << "-----+------------+------------+------------+----------\n";
 
       model best_mode_model = m;
       if (!out_cont.empty())
@@ -429,7 +440,8 @@ void do_search(model& m, const boost::optional<model>& ref,
         ++how_many;
         m.set(out_cont[i].c);
         log << std::setw(5) << how_many << std::setw(12)
-            << std::setprecision(2) << out_cont[i].e; // intermolecular_energies[i];
+            << std::setprecision(2) << out_cont[i].e 
+            << std::setw(12) << std::setprecision(2) << out_cont[i].intramol; 
         log << " " << std::setw(12) << std::setprecision(4) << out_cont[i].cnnscore << "  "
             << std::setw(9) << std::setprecision(3) << out_cont[i].cnnaffinity;
         log.endl();
@@ -505,6 +517,9 @@ void main_procedure(model &m, precalculate &prec,
   if (settings.max_mc_steps > 0 && par.mc.num_steps > settings.max_mc_steps) {
     par.mc.num_steps = settings.max_mc_steps;
   }
+  if (settings.temperature > 0) {
+    par.mc.temperature = settings.temperature; //expose temperature to user for cnn metropolis
+  }
 
   par.mc.ssd_par.evals = unsigned((25 + m.num_movable_atoms()) / 3);
   if (minparm.maxiters == 0)
@@ -547,7 +562,7 @@ void main_procedure(model &m, precalculate &prec,
       do_search(m, ref, wt, prec, *nc, *nc, corner1, corner2, par,
           settings, compute_atominfo, log,
           wt.unweighted_terms(), user_grid, cnn,
-          results);
+          results,gridcache,gd,slope);
     }
     else
     {
@@ -570,7 +585,7 @@ void main_procedure(model &m, precalculate &prec,
       }
       do_search(m, ref, wt, prec, *c, *nc, corner1, corner2, par,
           settings, compute_atominfo, log,
-          wt.unweighted_terms(), user_grid, cnn, results);
+          wt.unweighted_terms(), user_grid, cnn, results,gridcache,gd,slope);
     }
 
     delete nc;
@@ -772,89 +787,58 @@ void setup_user_gd(grid_dims& gd, std::ifstream& user_in)
 
 }
 
+// work queue job format
+struct worker_job {
+  unsigned int molid;
+  model *m;
+  std::vector<result_info> *results;
+  grid_dims gd;
 
-//work queue job format
-struct worker_job
-{
-    unsigned int molid;
-    model* m;
-    std::vector<result_info>* results;
-    grid_dims gd;
+  worker_job(unsigned int molid, model *m, std::vector<result_info> *results, grid_dims gd)
+      : molid(molid), m(m), results(results), gd(gd){};
 
-    worker_job(unsigned int molid, model* m, std::vector<result_info>* results,
-        grid_dims gd)
-        :
-            molid(molid), m(m), results(results), gd(gd)
-    {
+  worker_job() : molid(0), m(NULL), results(NULL) {
+    for (int i = 0; i < 3; i++) {
+      gd[i] = grid_dim();
     }
-    ;
-
-    worker_job()
-        :
-            molid(0), m(NULL), results(NULL)
-    {
-      for (int i = 0; i < 3; i++)
-          {
-        gd[i] = grid_dim();
-      }
-    }
-    ;
-
+  };
 };
 
-//writer queue job format
-struct writer_job
-{
-    unsigned int molid;
-    std::vector<result_info>* results;
+// writer queue job format
+struct writer_job {
+  unsigned int molid;
+  std::vector<result_info> *results;
 
-    writer_job(unsigned int molid, std::vector<result_info>* results)
-        :
-            molid(molid), results(results)
-    {
-    }
-    ;
+  writer_job(unsigned int molid, std::vector<result_info> *results) : molid(molid), results(results){};
 
-    writer_job()
-        :
-            molid(0), results(NULL)
-    {
-    }
-    ;
+  writer_job() : molid(0), results(NULL){};
 };
 
-template<typename T>
-struct job_queue
-{
-    job_queue()
-        :
-            jobs(0)
-    {
-    }
-    ;
+template <typename T> struct job_queue {
+  job_queue() : jobs(0){};
 
-    void push(T& job) {
-      jobs.push(job);
+  void push(T &job) {
+    jobs.push(job);
+    has_work.signal();
+  }
+
+  // Returns false and doesn't modify job iff the queue has been
+  // closed. Should not be called again in the same thread afterwards.
+  bool wait_and_pop(T &job) {
+    has_work.wait();
+    return !jobs.pop(job);
+  }
+
+  // Signal that all jobs are done. num_possible_waiters will be waiting
+  // on the sem, so arrange for them to wake. They'll find an empty
+  // queue that distinguishes these special signals.
+  void close(size_t num_possible_waiters) {
+    for (size_t i = 0; i < num_possible_waiters; i++)
       has_work.signal();
-    }
+  }
 
-    // Returns false and doesn't modify job iff the queue has been
-    // closed. Should not be called again in the same thread afterwards.
-    bool wait_and_pop(T& job) {
-      has_work.wait();
-      return !jobs.pop(job);
-    }
-
-    // Signal that all jobs are done. num_possible_waiters will be waiting
-    // on the sem, so arrange for them to wake. They'll find an empty
-    // queue that distinguishes these special signals.
-    void close(size_t num_possible_waiters) {
-      for (size_t i = 0; i < num_possible_waiters; i++)
-        has_work.signal();
-    }
-
-    sem has_work;
-    boost::lockfree::queue<T> jobs;
+  sem has_work;
+  boost::lockfree::queue<T> jobs;
 };
 
 //A struct of parameters that define the current run. These are packed together
@@ -918,8 +902,7 @@ void threads_at_work(job_queue<worker_job> *wrkq,
 void write_out(std::vector<result_info> &results, ozfile &outfile,
     std::string &outext,
     user_settings &settings, const weighted_terms &wt, ozfile &outflex,
-    std::string &outfext, std::ofstream &atomoutfile)
-    {
+    std::string &outfext, std::ofstream &atomoutfile)  {
   if (outfile)
   {
     //write out molecular data
@@ -999,11 +982,9 @@ Please report this error at https://github.com/gnina/gnina/issues\n"
     * the type of computer system you are running it on,\n\
 	* all command line options,\n\
 	* configuration file (if used),\n\
-    * ligand file as PDBQT,\n\
-    * receptor file as PDBQT,\n\
-	* flexible side chains file as PDBQT (if used),\n\
-	* output file as PDBQT (if any),\n\
-    * input (if possible),\n\
+    * ligand file as provided to gnina,\n\
+    * receptor file as provided to gnina,\n\
+	* output file (if any),\n\
 	* random seed the program used (this is printed when the program starts).\n\
 \n\
 Thank you!\n";
@@ -1061,7 +1042,9 @@ Thank you!\n";
     bool print_atom_types = false;
     bool add_hydrogens = true;
     bool strip_hydrogens = false;
-    bool no_lig = false;
+    bool full_flex_output = false;
+
+    CovOptions copt;
 
     user_settings settings;
     cnn_options& cnnopts = settings.cnnopts;
@@ -1106,8 +1089,18 @@ Thank you!\n";
         "Amount of buffer space to add to auto-generated box (default +4 on all six sides)")
     ("autobox_extend", value<bool>(&autobox_extend)->default_value(true),
             "Expand the autobox if needed to ensure the input conformation of the ligand being docked can freely rotate within the box.")
-    ("no_lig", bool_switch(&no_lig)->default_value(false),
+    ("no_lig", bool_switch(&settings.no_lig)->default_value(false),
         "no ligand; for sampling/minimizing flexible residues");
+
+    options_description covalent("Covalent docking");
+    covalent.add_options()
+    ("covalent_rec_atom", value<std::string>(&copt.covalent_rec_atom), "Receptor atom ligand is covalently bound to.  Can be specified as chain:resnum:atom_name or as x,y,z Cartesian coordinates.")
+    ("covalent_lig_atom_pattern", value<std::string>(&copt.covalent_lig_atom_pattern), "SMARTS expression for ligand atom that will covalently bind protein.")
+    ("covalent_lig_atom_position", value<std::string>(&copt.covalent_lig_atom_position), "Optional.  Initial placement of covalently bonding ligand atom in x,y,z Cartesian coordinates.  If not specified, OpenBabel's GetNewBondVector function will be used to position ligand.")
+    ("covalent_fix_lig_atom_position", bool_switch(&copt.covalent_fix_lig_atom_position), "If covalent_lig_atom_position is specified, fix the ligand atom to this position as opposed to using this position to define the initial structure.")
+    ("covalent_bond_order", value<int>(&copt.bond_order)->default_value(1), "Bond order of covalent bond. Default 1.")
+    ("covalent_optimize_lig", bool_switch(&copt.covalent_optimize_lig), "Optimize the covalent complex of ligand and residue using UFF. This will change bond angles and lengths of the ligand.");
+
 
     options_description outputs("Output");
     outputs.add_options()
@@ -1122,7 +1115,9 @@ Thank you!\n";
         bool_switch(&settings.include_atom_info)->default_value(false),
         "embedded per-atom interaction terms in output sd data")
     ("pose_sort_order",value<pose_sort_order>(&settings.sort_order)->default_value(CNNscore),
-        "How to sort docking results: CNNscore (default), CNNaffinity, Energy");
+        "How to sort docking results: CNNscore (default), CNNaffinity, Energy")
+    ("full_flex_output", bool_switch(&full_flex_output)->default_value(false), "Output entire structure for out_flex, not just flexible residues.");
+
 
     options_description scoremin("Scoring and minimization options");
     scoremin.add_options()
@@ -1146,6 +1141,8 @@ Thank you!\n";
         "cap on number of monte carlo steps to take in each chain")
     ("num_mc_saved", value<int>(&settings.num_mc_saved),
             "number of top poses saved in each monte carlo chain")
+    ("temperature", value<fl>(&settings.temperature),
+            "temperature for metropolis accept criterion")
     ("minimize_iters",
         value<unsigned>(&minparms.maxiters)->default_value(0),
         "number iterations of steepest descent; default scales with rotors and usually isn't sufficient for convergence")
@@ -1188,7 +1185,7 @@ Thank you!\n";
     options_description cnn("Convolutional neural net (CNN) scoring");
     cnn.add_options()
     ("cnn_scoring",value<cnn_scoring_level>(&cnnopts.cnn_scoring)->default_value(CNNrescore),
-                    "Amount of CNN scoring: none, rescore (default), refinement, all")
+                    "Amount of CNN scoring: none, rescore (default), refinement, metrorescore (metropolis+rescore), metrorefine (metropolis+refine), all")
     ("cnn", value<std::vector<std::string> >(&cnnopts.cnn_model_names)->multitoken(),
         ("built-in model to use, specify PREFIX_ensemble to evaluate an ensemble of models starting with PREFIX: " + builtin_cnn_models()).c_str())
     ("cnn_model", value<std::vector<std::string>>(&cnnopts.cnn_models)->multitoken(),
@@ -1199,7 +1196,7 @@ Thank you!\n";
         "resolution of grids, don't change unless you really know what you are doing")
     ("cnn_rotation", value<unsigned>(&cnnopts.cnn_rotations)->default_value(0),
         "evaluate multiple rotations of pose (max 24)")
-    ("cnn_update_min_frame", bool_switch(&cnnopts.move_minimize_frame)->default_value(true),
+    ("cnn_update_min_frame", value<bool>(&cnnopts.move_minimize_frame)->default_value(true),
         "During minimization, recenter coordinate frame as ligand moves")
     ("cnn_freeze_receptor", bool_switch(&cnnopts.fix_receptor),
         "Don't move the receptor with respect to a fixed coordinate system")
@@ -1258,9 +1255,9 @@ Thank you!\n";
     ("version", bool_switch(&version), "display program version");
 
     options_description desc, desc_simple;
-    desc.add(inputs).add(search_area).add(outputs).add(scoremin).add(cnn).
+    desc.add(inputs).add(search_area).add(covalent).add(outputs).add(scoremin).add(cnn).
         add(hidden).add(misc).add(config).add(info);
-    desc_simple.add(inputs).add(search_area).add(scoremin).add(cnn).
+    desc_simple.add(inputs).add(search_area).add(covalent).add(scoremin).add(cnn).
         add(outputs).add(misc).add(config).add(info);
 
     variables_map vm;
@@ -1390,7 +1387,6 @@ Thank you!\n";
     bool receptor_needed = !settings.randomize_only;
 
 
-
     if (cnnopts.cnn_scoring == CNNall) {
       cnnopts.move_minimize_frame = true;
     }
@@ -1410,7 +1406,7 @@ Thank you!\n";
     }
 
     if (ligand_names.size() == 0) {
-      if (!no_lig)
+      if (!settings.no_lig)
       {
         std::cerr << "Missing ligand.\n" << "\nCorrect usage:\n"
             << desc_simple << '\n';
@@ -1421,12 +1417,18 @@ Thank you!\n";
         ligand_names.push_back("");
       }
     }
-    else if (no_lig) //ligand specified with no_lig
+    else if (settings.no_lig) //ligand specified with no_lig
     {
       std::cerr << "Ligand specified with --no_lig.\n"
           << "\nCorrect usage:\n"
           << desc_simple << '\n';
       return 1;
+    } else {
+      for(const auto& lname : ligand_names) {
+        if(!boost::filesystem::exists(lname)) {
+          throw file_error(lname, true);
+        }
+      }
     }
 
     if (settings.exhaustiveness < 1)
@@ -1473,9 +1475,10 @@ Thank you!\n";
     }
     log << "\n";
 
-    FlexInfo finfo(flex_res, flex_dist, flexdist_ligand, nflex, nflex_hard_limit, log);
+    FlexInfo finfo(flex_res, flex_dist, flexdist_ligand, nflex, nflex_hard_limit, full_flex_output, log);
+    CovInfo cinfo(copt, log);
     // dkoes - parse in receptor once
-    MolGetter mols(rigid_name, flex_name, finfo, add_hydrogens, strip_hydrogens, log);
+    MolGetter mols(rigid_name, flex_name, finfo, cinfo, add_hydrogens, strip_hydrogens, log);
 
     if (autobox_ligand.length() > 0) {
       setup_autobox(mols.getInitModel(),autobox_ligand, autobox_add,
@@ -1542,12 +1545,12 @@ Thank you!\n";
       log << std::setw(12) << std::left << "Weights" << " Terms\n" << t << "\n";
 
     // Print out flexible residues 
-    if(finfo.hasContent()){
-      finfo.printFlex();
+    if(finfo.has_content()){
+      finfo.print_flex();
     }
     
     // Print information about flexible residues use
-    if (finfo.hasContent() && cnnopts.cnn_scoring != CNNnone) {
+    if (finfo.has_content() && cnnopts.cnn_scoring != CNNnone) {
       if(!cnnopts.fix_receptor && settings.verbosity > 1)
           log << "Receptor position and orientation are frozen.\n";
       cnnopts.fix_receptor = true; // Fix receptor position and orientation
@@ -1699,7 +1702,7 @@ Thank you!\n";
             }
             if(skip)
               continue;
-          } else if(autobox_extend) {
+          } else if(autobox_extend && !settings.no_lig) {
             //make sure every dimension is large enough for the ligand to fit
             fl maxdim = m->max_span(0);
             setup_grid_dims(center_x, center_y, center_z,
@@ -1709,13 +1712,12 @@ Thank you!\n";
           }
 
           done(settings.verbosity, log);
-          std::vector<result_info>* results =
-              new std::vector<result_info>();
+          std::vector<result_info>* results = new std::vector<result_info>();
           worker_job j(i, m, results, gdbox);
           wrkq.push(j);
 
           i++;
-          if (no_lig)
+          if (settings.no_lig)
             break;
         }
       }
